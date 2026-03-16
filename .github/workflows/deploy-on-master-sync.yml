@@ -1,0 +1,50 @@
+name: Deploy On Master Sync
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: branch to deploy
+        required: true
+        default: main
+
+concurrency:
+  group: deploy-on-master-sync
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve branch
+        id: ref
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "branch=${{ inputs.branch }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "branch=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Start ssh-agent
+        run: |
+          eval "$(ssh-agent -s)"
+          echo "${{ secrets.DEPLOY_SSH_KEY }}" | tr -d '\r' | ssh-add -
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          ssh-keyscan -p "${{ secrets.DEPLOY_SSH_PORT }}" -H "${{ secrets.DEPLOY_SSH_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Run remote deploy
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_SSH_HOST }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_SSH_USER }}
+          DEPLOY_APP_DIR: ${{ secrets.DEPLOY_APP_DIR }}
+          DEPLOY_RESTART_CMD: ${{ secrets.DEPLOY_RESTART_CMD }}
+          DEPLOY_RUN_BUILD: ${{ secrets.DEPLOY_RUN_BUILD }}
+          DEPLOY_RUN_INSTALL: ${{ secrets.DEPLOY_RUN_INSTALL }}
+          DEPLOY_BRANCH: ${{ steps.ref.outputs.branch }}
+        run: |
+          ssh -p "${DEPLOY_PORT}" "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            "export DEPLOY_APP_DIR='${DEPLOY_APP_DIR}' DEPLOY_RESTART_CMD='${DEPLOY_RESTART_CMD}' DEPLOY_RUN_BUILD='${DEPLOY_RUN_BUILD}' DEPLOY_RUN_INSTALL='${DEPLOY_RUN_INSTALL}' && bash \"${DEPLOY_APP_DIR}/external/deploy/remote_sync_deploy.sh\" \"${DEPLOY_BRANCH}\""
