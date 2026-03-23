@@ -1,7 +1,12 @@
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { resolveExtensionTestPlan } from "../../scripts/test-extension.mjs";
+import {
+  detectChangedExtensionIds,
+  listAvailableExtensionIds,
+  listChangedExtensionIds,
+  resolveExtensionTestPlan,
+} from "../../scripts/test-extension.mjs";
 
 const scriptPath = path.join(process.cwd(), "scripts", "test-extension.mjs");
 
@@ -11,6 +16,13 @@ function readPlan(args: string[], cwd = process.cwd()) {
     encoding: "utf8",
   });
   return JSON.parse(stdout) as ReturnType<typeof resolveExtensionTestPlan>;
+}
+
+function runScript(args: string[], cwd = process.cwd()) {
+  return execFileSync(process.execPath, [scriptPath, ...args], {
+    cwd,
+    encoding: "utf8",
+  });
 }
 
 describe("scripts/test-extension.mjs", () => {
@@ -35,9 +47,8 @@ describe("scripts/test-extension.mjs", () => {
     const plan = resolveExtensionTestPlan({ targetArg: "line", cwd: process.cwd() });
 
     expect(plan.roots).toContain("extensions/line");
-    expect(plan.roots).toContain("src/line");
-    expect(plan.config).toBe("vitest.channels.config.ts");
-    expect(plan.testFiles.some((file) => file.startsWith("src/line/"))).toBe(true);
+    expect(plan.config).toBe("vitest.extensions.config.ts");
+    expect(plan.testFiles.some((file) => file.startsWith("extensions/line/"))).toBe(true);
   });
 
   it("infers the extension from the current working directory", () => {
@@ -46,5 +57,49 @@ describe("scripts/test-extension.mjs", () => {
 
     expect(plan.extensionId).toBe("slack");
     expect(plan.extensionDir).toBe("extensions/slack");
+  });
+
+  it("maps changed paths back to extension ids", () => {
+    const extensionIds = detectChangedExtensionIds([
+      "extensions/slack/src/channel.ts",
+      "src/line/message.test.ts",
+      "extensions/firecrawl/package.json",
+      "src/not-a-plugin/file.ts",
+    ]);
+
+    expect(extensionIds).toEqual(["firecrawl", "line", "slack"]);
+  });
+
+  it("lists available extension ids", () => {
+    const extensionIds = listAvailableExtensionIds();
+
+    expect(extensionIds).toContain("slack");
+    expect(extensionIds).toContain("firecrawl");
+    expect(extensionIds).toEqual(
+      [...extensionIds].toSorted((left, right) => left.localeCompare(right)),
+    );
+  });
+
+  it("can fail safe to all extensions when the base revision is unavailable", () => {
+    const extensionIds = listChangedExtensionIds({
+      base: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+      unavailableBaseBehavior: "all",
+    });
+
+    expect(extensionIds).toEqual(listAvailableExtensionIds());
+  });
+
+  it("dry-run still reports a plan for extensions without tests", () => {
+    const plan = readPlan(["copilot-proxy"]);
+
+    expect(plan.extensionId).toBe("copilot-proxy");
+    expect(plan.testFiles).toEqual([]);
+  });
+
+  it("treats extensions without tests as a no-op by default", () => {
+    const stdout = runScript(["copilot-proxy"]);
+
+    expect(stdout).toContain("No tests found for extensions/copilot-proxy.");
+    expect(stdout).toContain("Skipping.");
   });
 });
